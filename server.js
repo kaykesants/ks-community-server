@@ -242,38 +242,6 @@ app.get(['/api/admin/stats','/admin/stats'], adminAuthMiddleware, (req, res) => 
     res.json({ users: users.length, active7, posts: posts.length, comments: comments.length, reports: reports.filter(r=>r.status==='open').length, updates: updates.length, announcements: announcements.length, events: appEvents.length });
 });
 
-app.get(['/api/admin/me','/admin/me'], adminAuthMiddleware, (req, res) => {
-    res.json({ success:true, admin:{ id:req.admin.id, email:req.admin.email, role:req.admin.role }, me:{ id:req.admin.id, email:req.admin.email, role:req.admin.role } });
-});
-
-app.get(['/api/admin/dashboard','/admin/dashboard','/api/admin/metrics','/admin/metrics'], adminAuthMiddleware, (req, res) => {
-    const now=Date.now(); const sevenDaysAgo=now-7*24*60*60*1000;
-    const active7=users.filter(u=>u.lastActiveAt && u.lastActiveAt>sevenDaysAgo).length;
-    const published=updates.filter(u=>u.published).sort((a,b)=>b.versionCode-a.versionCode)[0];
-    res.json({
-        users: users.length,
-        totalUsers: users.length,
-        active: active7,
-        active7,
-        active7d: active7,
-        installs: users.length,
-        totalInstalls: users.length,
-        posts: posts.length,
-        totalPosts: posts.length,
-        comments: comments.length,
-        totalComments: comments.length,
-        reports: reports.filter(r=>r.status==='open').length,
-        pendingReports: reports.filter(r=>r.status==='open').length,
-        updates: updates.length,
-        announcements: announcements.length,
-        events: appEvents.length,
-        version: published?published.versionName:"--",
-        currentVersion: published?published.versionName:"--",
-        server: "ONLINE",
-        status: "ONLINE"
-    });
-});
-
 app.get(['/api/admin/users','/admin/users'], adminAuthMiddleware, (req, res) => {
     const safeUsers=users.map(u=>{ const {token, deviceFingerprint, ...safe}=u; return safe; });
     res.json({ success:true, users:safeUsers, data:safeUsers });
