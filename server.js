@@ -1,5 +1,5 @@
-// KS Community + Admin Center - BACKEND FINAL COMPLETO COM LIKE E COMMENT
-// Coloque este arquivo como server.js no seu Render (ks-community-server.onrender.com)
+// KS Community + Admin Center - BACKEND V2 INSANO COM BROADCAST
+// Render: ks-community-server.onrender.com - server.js
 
 const express = require('express');
 const cors = require('cors');
@@ -46,6 +46,7 @@ let updates = loadJson('updates.json', []);
 let announcements = loadJson('announcements.json', []);
 let appEvents = loadJson('app_events.json', []);
 let auditLogs = loadJson('audit_logs.json', []);
+let broadcasts = loadJson('broadcasts.json', []); // NOVO V2
 
 if(adminUsers.length === 0){
     const defaultAdmin = {
@@ -117,6 +118,9 @@ app.post(['/api/auth/profile','/auth/profile'], (req, res) => {
             const id = uuidv4(); const token = uuidv4() + '-' + uuidv4();
             const newUser = { id, name: finalName, username: finalUsername, nick: finalUsername, bio: bio||'', avatar: avatar||'', photo: avatar||'', deviceFingerprint, token, createdAt: Date.now(), updatedAt: Date.now(), lastActiveAt: Date.now(), postsCount: 0, repliesCount: 0, likesReceived: 0, isAdmin: users.length===0, isVerified: false, badges: [], status: 'active', appVersion: appVersion||'unknown' };
             users.push(newUser); saveJson('users.json', users);
+            // Log evento de instalacao
+            appEvents.push({ id: uuidv4(), type: 'install', userId: id, appVersion: appVersion||'unknown', createdAt: Date.now() });
+            saveJson('app_events.json', appEvents);
             return res.json({ token: newUser.token, userId: newUser.id, id: newUser.id, user: newUser });
         }
     }catch(e){ res.status(500).json({ error: e.message }); }
@@ -125,9 +129,9 @@ app.post(['/api/auth/profile','/auth/profile'], (req, res) => {
 app.post(['/api/admin/auth/login','/admin/auth/login'], (req, res) => {
     try{
         const { email, password } = req.body;
-        if(!email || !password) return res.status(400).json({ error: 'Email e senha obrigatorios' });
+        if(!email ||!password) return res.status(400).json({ error: 'Email e senha obrigatorios' });
         const admin = adminUsers.find(a => a.email.toLowerCase() === email.toLowerCase());
-        if(!admin || admin.passwordHash !== hashPassword(password)) return res.status(401).json({ error: 'Credenciais invalidas' });
+        if(!admin || admin.passwordHash!== hashPassword(password)) return res.status(401).json({ error: 'Credenciais invalidas' });
         const token = uuidv4() + '-' + uuidv4();
         const session = { id: uuidv4(), adminUserId: admin.id, token, createdAt: Date.now(), expiresAt: Date.now() + 24*60*60*1000, ip: req.ip };
         adminSessions.push(session); admin.lastLoginAt = Date.now();
@@ -141,12 +145,12 @@ app.post(['/api/admin/auth/login','/admin/auth/login'], (req, res) => {
 app.get(['/api/community/posts','/community/posts'], (req, res) => {
     try{
         let { page, limit, category } = req.query; page = parseInt(page)||1; limit = parseInt(limit)||20;
-        let filtered = [...posts].filter(p => !p.isHidden);
-        if(req.user){ const myBlocks = blocks.filter(b => b.userId===req.user.id).map(b=>b.blockedUserId); filtered = filtered.filter(p => !myBlocks.includes(p.userId)); }
+        let filtered = [...posts].filter(p =>!p.isHidden);
+        if(req.user){ const myBlocks = blocks.filter(b => b.userId===req.user.id).map(b=>b.blockedUserId); filtered = filtered.filter(p =>!myBlocks.includes(p.userId)); }
         if(category && category!=='TODOS') filtered = filtered.filter(p => p.category===category);
-        filtered.sort((a,b)=>{ if(a.isPinned && !b.isPinned) return -1; if(!a.isPinned && b.isPinned) return 1; return b.createdAt-a.createdAt; });
+        filtered.sort((a,b)=>{ if(a.isPinned &&!b.isPinned) return -1; if(!a.isPinned && b.isPinned) return 1; return b.createdAt-a.createdAt; });
         const start=(page-1)*limit; const paged=filtered.slice(start,start+limit);
-        const result=paged.map(p=>({ ...p, isOwner: req.user?req.user.id===p.userId:false, likedByMe: req.user?(p.likedBy && p.likedBy.includes(req.user.id)):false }));
+        const result=paged.map(p=>({...p, isOwner: req.user?req.user.id===p.userId:false, likedByMe: req.user?(p.likedBy && p.likedBy.includes(req.user.id)):false }));
         res.json(result);
     }catch(e){ res.status(500).json({ error: e.message }); }
 });
@@ -160,11 +164,11 @@ app.post(['/api/community/posts','/community/posts'], (req, res) => {
         const newPost = { id: uuidv4(), userId: req.user.id, name: req.user.name, username: req.user.username, avatar: req.user.avatar, content: content.trim(), category: category||'GERAL', createdAt: Date.now(), likes:0, comments:0, likedBy:[], isPinned:false, isHidden:false };
         posts.unshift(newPost); req.user.postsCount=(req.user.postsCount||0)+1;
         saveJson('posts.json', posts); saveJson('users.json', users);
-        res.json({ success:true, post:newPost, ...newPost });
+        res.json({ success:true, post:newPost,...newPost });
     }catch(e){ res.status(500).json({ error: e.message }); }
 });
 
-// LIKE - FIX 404
+// LIKE
 app.post(['/api/community/posts/:id/like','/community/posts/:id/like'], (req, res) => {
     try{
         if(!req.user) return res.status(401).json({ error: 'Precisa autenticar' });
@@ -181,11 +185,11 @@ app.post(['/api/community/posts/:id/like','/community/posts/:id/like'], (req, re
     }catch(e){ res.status(500).json({ error: e.message }); }
 });
 
-// COMMENTS - FIX 404
+// COMMENTS
 app.get(['/api/community/posts/:id/comments','/community/posts/:id/comments'], (req, res) => {
     try{
         const postId=req.params.id; let postComments=comments.filter(c=>c.postId===postId).sort((a,b)=>a.createdAt-b.createdAt);
-        const result=postComments.map(c=>({ ...c, isOwner: req.user?req.user.id===c.userId:false }));
+        const result=postComments.map(c=>({...c, isOwner: req.user?req.user.id===c.userId:false }));
         res.json(result);
     }catch(e){ res.status(500).json({ error: e.message }); }
 });
@@ -228,32 +232,145 @@ app.post(['/api/community/block','/community/block'], (req, res) => {
 });
 
 app.get(['/api/community/users/:id','/community/users/:id'], (req, res) => {
-    try{ const u=users.find(x=>x.id===req.params.id); if(!u) return res.status(404).json({ error:'Usuario nao encontrado' }); const { token, deviceFingerprint, ...safe }=u; res.json(safe); }catch(e){ res.status(500).json({ error:e.message }); }
+    try{ const u=users.find(x=>x.id===req.params.id); if(!u) return res.status(404).json({ error:'Usuario nao encontrado' }); const { token, deviceFingerprint,...safe }=u; res.json(safe); }catch(e){ res.status(500).json({ error:e.message }); }
 });
 
 app.get(['/api/community/search','/community/search'], (req, res) => {
     try{ const q=(req.query.q||"").toLowerCase(); if(!q) return res.json([]); let result=posts.filter(p=>p.content.toLowerCase().includes(q)||p.username.toLowerCase().includes(q)||p.name.toLowerCase().includes(q)).slice(0,20); res.json(result); }catch(e){ res.status(500).json({ error:e.message }); }
 });
 
-// ADMIN
+// ================== ADMIN V2 INSANO - BROADCAST SYSTEM ==================
 app.get(['/api/admin/stats','/admin/stats'], adminAuthMiddleware, (req, res) => {
     const now=Date.now(); const sevenDaysAgo=now-7*24*60*60*1000;
     const active7=users.filter(u=>u.lastActiveAt && u.lastActiveAt>sevenDaysAgo).length;
-    res.json({ users: users.length, active7, posts: posts.length, comments: comments.length, reports: reports.filter(r=>r.status==='open').length, updates: updates.length, announcements: announcements.length, events: appEvents.length });
+    const installs = appEvents.filter(e=>e.type==='install').length || users.length;
+    res.json({
+        users: users.length,
+        usuarios: users.length,
+        instalacoes: installs,
+        installs: installs,
+        active7,
+        ativos: active7,
+        posts: posts.length,
+        comments: comments.length,
+        reports: reports.filter(r=>r.status==='open').length,
+        denuncias: reports.filter(r=>r.status==='open').length,
+        updates: updates.length,
+        announcements: announcements.length,
+        events: appEvents.length,
+        broadcasts: broadcasts.filter(b=>b.active).length,
+        version: updates.filter(u=>u.published).sort((a,b)=>b.versionCode-a.versionCode)[0]?.versionName || 'v2.5.0',
+        server: 'ONLINE'
+    });
 });
 
 app.get(['/api/admin/users','/admin/users'], adminAuthMiddleware, (req, res) => {
-    const safeUsers=users.map(u=>{ const {token, deviceFingerprint, ...safe}=u; return safe; });
+    const safeUsers=users.map(u=>{ const {token, deviceFingerprint,...safe}=u; return safe; });
     res.json({ success:true, users:safeUsers, data:safeUsers });
 });
 app.get(['/api/admin/posts','/admin/posts'], adminAuthMiddleware, (req, res) => { res.json({ success:true, posts, data:posts }); });
 app.get(['/api/admin/reports','/admin/reports'], adminAuthMiddleware, (req, res) => { res.json({ success:true, reports, data:reports }); });
+
 app.post(['/api/admin/users/:id/suspend','/admin/users/:id/suspend'], adminAuthMiddleware, (req, res) => {
     const user=users.find(u=>u.id===req.params.id); if(!user) return res.status(404).json({ error:'Usuario nao encontrado' });
     user.status='suspended'; saveJson('users.json', users);
     logAudit(req.admin.id, 'suspend_user', user.id, 'user', req.body, 'success', req.ip);
     res.json({ success:true });
 });
+
+// BROADCAST ENDPOINTS - NOVO V2
+app.get(['/api/admin/broadcasts','/admin/broadcasts'], adminAuthMiddleware, (req, res) => {
+    const active = broadcasts.sort((a,b)=>b.createdAt-a.createdAt);
+    res.json({ success:true, broadcasts: active, data: active });
+});
+
+app.post(['/api/admin/broadcast','/admin/broadcast'], adminAuthMiddleware, (req, res) => {
+    try{
+        const { type, message, title, btnText, color, version, url, global, userId, priority } = req.body;
+        if(!type ||!message) return res.status(400).json({ error: 'type e message obrigatorios' });
+
+        const allowedTypes = ['toast','dialog','banner','force_update','announcement','notification'];
+        if(!allowedTypes.includes(type)) return res.status(400).json({ error: 'type invalido. Use: '+allowedTypes.join(',') });
+
+        const broadcast = {
+            id: uuidv4(),
+            type, // toast, dialog, banner, force_update, announcement
+            title: title || (type==='toast'? 'KS APK Editor' : type==='dialog'? 'Aviso' : type==='banner'? 'Novidade' : 'Atualizacao'),
+            message,
+            btnText: btnText || (type==='force_update'? 'ATUALIZAR AGORA' : 'OK'),
+            color: color || (type==='toast'? '#7C4DFF' : type==='dialog'? '#7C4DFF' : type==='banner'? '#7C4DFF' : '#FF5C7A'),
+            version: version || null,
+            url: url || null,
+            global: global!== false,
+            userId: userId || null,
+            priority: priority || 'normal',
+            createdAt: Date.now(),
+            createdBy: req.admin.id,
+            active: true,
+            readBy: []
+        };
+
+        broadcasts.push(broadcast);
+        if(broadcasts.length > 200) broadcasts = broadcasts.slice(-200);
+        saveJson('broadcasts.json', broadcasts);
+
+        logAudit(req.admin.id, 'broadcast_'+type, broadcast.id, 'broadcast', { type, message: message.substring(0,100) }, 'success', req.ip);
+
+        console.log(`[ADMIN BROADCAST V2] ${type.toUpperCase()} - ${message.substring(0,80)} - Global:${broadcast.global}`);
+        res.json({ success:true, broadcast });
+    }catch(e){ res.status(500).json({ error: e.message }); }
+});
+
+app.delete(['/api/admin/broadcast/:id','/admin/broadcast/:id'], adminAuthMiddleware, (req, res) => {
+    const idx = broadcasts.findIndex(b=>b.id===req.params.id);
+    if(idx===-1) return res.status(404).json({ error: 'Broadcast nao encontrado' });
+    const removed = broadcasts.splice(idx,1)[0];
+    saveJson('broadcasts.json', broadcasts);
+    logAudit(req.admin.id, 'delete_broadcast', removed.id, 'broadcast', {}, 'success', req.ip);
+    res.json({ success:true });
+});
+
+app.post(['/api/admin/broadcast/clear','/admin/broadcast/clear'], adminAuthMiddleware, (req, res) => {
+    broadcasts = [];
+    saveJson('broadcasts.json', broadcasts);
+    logAudit(req.admin.id, 'clear_broadcasts', null, 'broadcast', {}, 'success', req.ip);
+    res.json({ success:true, message: 'Todos broadcasts limpos' });
+});
+
+// APK Editor X busca broadcasts - PUBLICO mas filtra por userId/version
+app.get(['/api/broadcasts','/broadcasts'], (req, res) => {
+    try{
+        const { userId, version } = req.query;
+        let active = broadcasts.filter(b=>b.active);
+        // Filtra: global OU para o user especifico
+        active = active.filter(b=> b.global || (userId && b.userId===userId));
+        // Ordena por prioridade e data
+        active.sort((a,b)=>{
+            const prio = { high: 3, normal: 2, low: 1 };
+            const pa = prio[a.priority]||2;
+            const pb = prio[b.priority]||2;
+            if(pa!==pb) return pb-pa;
+            return b.createdAt-a.createdAt;
+        });
+        // Retorna só os ultimos 10 ativos
+        active = active.slice(0,10);
+        res.json({ success:true, broadcasts: active, data: active });
+    }catch(e){ res.status(500).json({ error: e.message }); }
+});
+
+// Marcar como lido (opcional)
+app.post(['/api/broadcasts/:id/read','/broadcasts/:id/read'], (req, res) => {
+    try{
+        const { userId } = req.body;
+        const b = broadcasts.find(x=>x.id===req.params.id);
+        if(b && userId &&!b.readBy.includes(userId)) {
+            b.readBy.push(userId);
+            saveJson('broadcasts.json', broadcasts);
+        }
+        res.json({ success:true });
+    }catch(e){ res.status(500).json({ error:e.message }); }
+});
+
 app.get(['/api/admin/updates','/admin/updates'], adminAuthMiddleware, (req, res) => { res.json({ success:true, updates, data:updates }); });
 app.get(['/api/update/latest','/update/latest','/api/updates/latest'], (req, res) => {
     try{
@@ -265,7 +382,7 @@ app.get(['/api/update/latest','/update/latest','/api/updates/latest'], (req, res
 app.post(['/api/admin/updates','/admin/updates'], adminAuthMiddleware, (req, res) => {
     try{
         const { versionCode, versionName, title, description, changelog, downloadUrl, fileSize, sha256, mandatory }=req.body;
-        if(!versionCode || !versionName || !downloadUrl) return res.status(400).json({ error:'versionCode, versionName e downloadUrl obrigatorios' });
+        if(!versionCode ||!versionName ||!downloadUrl) return res.status(400).json({ error:'versionCode, versionName e downloadUrl obrigatorios' });
         const upd={ id:uuidv4(), versionCode:parseInt(versionCode), versionName, title:title||'Atualizacao '+versionName, description:description||'', changelog:changelog||[], downloadUrl, fileSize:fileSize||0, size:fileSize||0, sha256:sha256||'', mandatory:!!mandatory, published:true, publishedAt:Date.now(), createdBy:req.admin.id, createdAt:Date.now() };
         updates.push(upd); saveJson('updates.json', updates);
         logAudit(req.admin.id, 'publish_update', upd.id, 'update', { versionName }, 'success', req.ip);
@@ -280,7 +397,7 @@ app.get(['/api/announcements','/announcements'], (req, res) => {
 app.post(['/api/admin/announcements','/admin/announcements'], adminAuthMiddleware, (req, res) => {
     try{
         const { title, message, type, priority, active, expiresAt }=req.body;
-        if(!title || !message) return res.status(400).json({ error:'Titulo e mensagem obrigatorios' });
+        if(!title ||!message) return res.status(400).json({ error:'Titulo e mensagem obrigatorios' });
         const ann={ id:uuidv4(), title, message, type:(type||'INFO').toUpperCase(), priority:(priority||'NORMAL').toUpperCase(), active:active!==false, createdAt:Date.now(), expiresAt:expiresAt||null, createdBy:req.admin.id };
         announcements.push(ann); saveJson('announcements.json', announcements);
         logAudit(req.admin.id, 'publish_announcement', ann.id, 'announcement', { title }, 'success', req.ip);
@@ -288,7 +405,7 @@ app.post(['/api/admin/announcements','/admin/announcements'], adminAuthMiddlewar
     }catch(e){ res.status(500).json({ error:e.message }); }
 });
 app.get(['/api/health','/health'], (req, res) => {
-    res.json({ status:'ONLINE', database:'ONLINE', community:posts.length>=0?'ONLINE':'OFFLINE', updateServer:'ONLINE', uptime:process.uptime(), users:users.length, posts:posts.length, timestamp:new Date().toISOString() });
+    res.json({ status:'ONLINE', database:'ONLINE', community:posts.length>=0?'ONLINE':'OFFLINE', updateServer:'ONLINE', uptime:process.uptime(), users:users.length, posts:posts.length, broadcasts: broadcasts.filter(b=>b.active).length, timestamp:new Date().toISOString() });
 });
-app.get('/', (req,res) => { res.json({ status:'KS Community + Admin API Online - FULL FIXED 404', users:users.length, posts:posts.length, comments:comments.length, updates:updates.length, announcements:announcements.length }); });
-app.listen(PORT, () => { console.log('KS Community + Admin FULL FIXED 404 rodando em '+PORT); });
+app.get('/', (req,res) => { res.json({ status:'KS Community + Admin V2 INSANO - BROADCAST ONLINE', users:users.length, posts:posts.length, comments:comments.length, updates:updates.length, announcements:announcements.length, broadcasts: broadcasts.filter(b=>b.active).length, version: 'v2-insano' }); });
+app.listen(PORT, () => { console.log('KS Community + Admin V2 INSANO rodando em '+PORT+' - Broadcast ativo!'); });
