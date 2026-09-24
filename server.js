@@ -408,4 +408,42 @@ app.get(['/api/health','/health'], (req, res) => {
     res.json({ status:'ONLINE', database:'ONLINE', community:posts.length>=0?'ONLINE':'OFFLINE', updateServer:'ONLINE', uptime:process.uptime(), users:users.length, posts:posts.length, broadcasts: broadcasts.filter(b=>b.active).length, timestamp:new Date().toISOString() });
 });
 app.get('/', (req,res) => { res.json({ status:'KS Community + Admin V2 INSANO - BROADCAST ONLINE', users:users.length, posts:posts.length, comments:comments.length, updates:updates.length, announcements:announcements.length, broadcasts: broadcasts.filter(b=>b.active).length, version: 'v2-insano' }); });
+// ============================================================
+// PING - presenca online do APK Editor (cole no server.js,
+// junto das outras rotas, antes do app.listen)
+// O KSAdminClient chama a cada 60s: atualiza lastActiveAt e
+// cria o usuario se ainda nao existir (upsert pelo fingerprint)
+// ============================================================
+app.post(['/api/ping', '/ping'], (req, res) => {
+  try {
+    const b = req.body || {};
+    const fp = b.deviceFingerprint || b.deviceId;
+    if (!fp) return res.status(400).json({ ok: false });
+    const now = Date.now();
+    let u = users.find(x => x.deviceFingerprint === fp);
+    if (u) {
+      u.lastActiveAt = now;
+      if (b.name) u.name = b.name;
+      if (b.username) { u.username = b.username; u.nick = b.username; }
+      if (b.avatar) { u.avatar = b.avatar; u.photo = b.avatar; }
+      if (b.appVersion) u.appVersion = b.appVersion;
+    } else {
+      u = {
+        id: uuidv4(),
+        name: b.name || 'Usuario',
+        username: b.username || ('user_' + String(fp).substring(0, 6)),
+        nick: b.username || '',
+        bio: '', avatar: b.avatar || '', photo: b.avatar || '',
+        deviceFingerprint: fp, token: null,
+        createdAt: now, updatedAt: now, lastActiveAt: now,
+        postsCount: 0, repliesCount: 0, likesReceived: 0,
+        isAdmin: false, isVerified: false, badges: [],
+        status: 'active', appVersion: b.appVersion || 'unknown'
+      };
+      users.push(u);
+    }
+    saveJson('users.json', users);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.listen(PORT, () => { console.log('KS Community + Admin V2 INSANO rodando em '+PORT+' - Broadcast ativo!'); });
