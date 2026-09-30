@@ -446,4 +446,160 @@ app.post(['/api/ping', '/ping'], (req, res) => {
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+
+let premiumRequests = loadJson('premium_requests.json', []);
+
+// Usuario pede acesso Premium
+app.post(['/api/premium/request', '/premium/request'], (req, res) => {
+    try {
+        const b = req.body || {};
+        const fp = b.deviceFingerprint;
+        if (!fp) return res.status(400).json({ error: 'deviceFingerprint obrigatorio' });
+        const contact = (b.contact || '').trim();
+        if (!contact) return res.status(400).json({ error: 'contato obrigatorio' });
+
+        const u = users.find(x => x.deviceFingerprint === fp);
+        if (u && u.isPremium) return res.json({ ok: true, already_active: true });
+
+        const existing = premiumRequests.find(r =>
+            r.deviceFingerprint === fp && r.status === 'pending');
+        if (existing) return res.json({ ok: true, already_pending: true, request: existing });
+
+        const r = {
+            id: uuidv4(),
+            deviceFingerprint: fp,
+            name: b.name || '',
+            username: b.username || '',
+            avatar: b.avatar || '',
+            contactType: b.contactType || 'whatsapp',
+            contact: contact,
+            appVersion: b.appVersion || 'unknown',
+            status: 'pending',
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+        };
+        premiumRequests.push(r);
+        saveJson('premium_requests.json', premiumRequests);
+        console.log('[PREMIUM] pedido de ' + r.name + ' (@' + r.username +
+            ') via ' + r.contactType + ': ' + r.contact);
+        res.json({ ok: true, request: r });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// App consulta: sou premium?
+app.get(['/api/premium/status', '/premium/status'], (req, res) => {
+    try {
+        const fp = req.query.deviceFingerprint;
+        if (!fp) return res.status(400).json({ error: 'deviceFingerprint obrigatorio' });
+        const u = users.find(x => x.deviceFingerprint === fp);
+        const pend = premiumRequests.find(r =>
+            r.deviceFingerprint === fp && r.status === 'pending');
+        const active = !!(u && u.isPremium);
+        res.json({
+            ok: true,
+            premium: active,
+            premiumSince: (u && u.premiumSince) || 0,
+            pending: !!pend,
+            status: active ? 'active' : (pend ? 'pending' : 'none')
+        });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- ADMIN ----
+
+app.get(['/api/admin/premium/requests', '/admin/premium/requests'],
+    adminAuthMiddleware, (req, res) => {
+        const list = [...premiumRequests].sort((a, b) => b.createdAt - a.createdAt);
+        res.json({ success: true, requests: list, data: list });
+    });
+
+app.post(['/api/admin/premium/requests/:id/approve', '/admin/premium/requests/:id/approve'],
+    adminAuthMiddleware, (req, res) => {
+        try {
+            const r = premiumRequests.find(x => x.id === req.params.id);
+            if (!r) return res.status(404).json({ error: 'Pedido nao encontrado' });
+            r.status = 'approved';
+            r.updatedAt = Date.now();
+            let u = users.find(x => x.deviceFingerprint === r.deviceFingerprint);
+            if (!u) {
+                u = {
+                    id: uuidv4(), name: r.name || 'Usuario',
+                    username: r.username || ('user_' + String(r.deviceFingerprint).substring(0, 6)),
+                    nick: r.username || '', bio: '',
+                    avatar: r.avatar || '', photo: r.avatar || '',
+                    deviceFingerprint: r.deviceFingerprint, token: null,
+                    createdAt: Date.now(), updatedAt: Date.now(), lastActiveAt: Date.now(),
+                    postsCount: 0, repliesCount: 0, likesReceived: 0,
+                    isAdmin: false, isVerified: false, badges: [],
+                    status: 'active', appVersion: r.appVersion || 'unknown'
+                };
+                users.push(u);
+            }
+            u.isPremium = true;
+            u.premiumSince = Date.now();
+            u.updatedAt = Date.now();
+            saveJson('premium_requests.json', premiumRequests);
+            saveJson('users.json', users);
+            logAudit(req.admin.id, 'premium_approve', r.id, 'premium',
+                { user: r.name, contact: r.contact }, 'success', req.ip);
+            console.log('[PREMIUM] APROVADO: ' + r.name + ' (@' + r.username + ')');
+            res.json({ success: true });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+app.post(['/api/admin/premium/requests/:id/reject', '/admin/premium/requests/:id/reject'],
+    adminAuthMiddleware, (req, res) => {
+        try {
+            const r = premiumRequests.find(x => x.id === req.params.id);
+            if (!r) return res.status(404).json({ error: 'Pedido nao encontrado' });
+            r.status = 'rejected';
+            r.updatedAt = Date.now();
+            saveJson('premium_requests.json', premiumRequests);
+            logAudit(req.admin.id, 'premium_reject', r.id, 'premium',
+                {}, 'success', req.ip);
+            res.json({ success: true });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+app.post(['/api/admin/premium/revoke', '/admin/premium/revoke'],
+    adminAuthMiddleware, (req, res) => {
+        try {
+            const fp = (req.body || {}).deviceFingerprint;
+            if (!fp) return res.status(400).json({ error: 'deviceFingerprint obrigatorio' });
+            const u = users.find(x => x.deviceFingerprint === fp);
+            if (!u) return res.status(404).json({ error: 'Usuario nao encontrado' });
+            u.isPremium = false;
+            u.premiumSince = 0;
+            u.updatedAt = Date.now();
+            saveJson('users.json', users);
+            logAudit(req.admin.id, 'premium_revoke', u.id, 'user',
+                {}, 'success', req.ip);
+            console.log('[PREMIUM] REVOGADO: ' + u.name);
+            res.json({ success: true });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+// Contadores premium no stats (aditivo, nao quebra o ADM atual)
+app.get(['/api/admin/premium/stats', '/admin/premium/stats'],
+    adminAuthMiddleware, (req, res) => {
+        const premiumUsers = users.filter(u => u.isPremium);
+        res.json({
+            success: true,
+            pending: premiumRequests.filter(r => r.status === 'pending').length,
+            active: premiumUsers.length,
+            total: premiumRequests.length,
+            premiumUsers: premiumUsers.map(u => {
+                const t = u.token, f = u.deviceFingerprint;
+                return {
+                    name: u.name, username: u.username, avatar: u.avatar,
+                    deviceFingerprint: u.deviceFingerprint,
+                    premiumSince: u.premiumSince || 0,
+                    lastActiveAt: u.lastActiveAt || 0,
+                    appVersion: u.appVersion || 'unknown'
+                };
+            })
+        });
+    });
+
 app.listen(PORT, () => { console.log('KS Community + Admin V2 INSANO rodando em '+PORT+' - Broadcast ativo!'); });
